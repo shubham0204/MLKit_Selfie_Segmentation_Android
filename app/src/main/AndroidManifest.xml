@@ -3,6 +3,9 @@
     package="com.shubham0204.selfiesegmentation">
 
     <!-- Add the camera permission -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="true" />
     <uses-permission android:name="android.permission.CAMERA"/>
 
     <application
@@ -11,7 +14,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.SelfieSegmentation">
+        android:theme="@style/Theme.AppTheme">
 
         <activity
             android:name=".MainActivity"

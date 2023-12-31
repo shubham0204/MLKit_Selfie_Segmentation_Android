@@ -16,137 +16,203 @@ package com.shubham0204.selfiesegmentation
 
 import android.Manifest
 import android.content.pm.PackageManager
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
-import android.util.Log
-import android.util.Size
-import android.view.View
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
+import androidx.annotation.OptIn
+import androidx.camera.core.ExperimentalGetImage
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.LifecycleOwner
-import com.google.common.util.concurrent.ListenableFuture
-import java.util.concurrent.ExecutionException
-import java.util.concurrent.Executors
+import com.ml.shubham0204.facenetdetection.ui.theme.AppTheme
 
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : ComponentActivity() {
 
-    private lateinit var previewView : PreviewView
-    private lateinit var drawingOverlay: DrawingOverlay
-    private lateinit var cameraProviderListenableFuture : ListenableFuture<ProcessCameraProvider>
-    private lateinit var frameAnalyser : FrameAnalyser
+    private val cameraPermissionStatus = mutableStateOf( true )
+    private val alertDialogShowStatus = mutableStateOf( false )
 
-    private val CAMERA_PERMISSION_REQUESTCODE = 102
+    private val alertDialogObjectParams = object {
+        var title = ""
+        var text = ""
+        var positiveButtonText: String? = ""
+        var negativeButtonText: String? = ""
+        var positiveButtonOnClick: (() -> Unit)? = null
+        var negativeButtonOnClick: (() -> Unit)? = null
+    }
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Remove the status bar to have a full screen experience
-        // See this answer on SO -> https://stackoverflow.com/a/68152688/10878733
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN
-        setContentView(R.layout.activity_main)
-
-        previewView = findViewById( R.id.camera_preview_view )
-
-        // Make sure that the DrawingOverlay remains on top
-        // See this SO answer -> https://stackoverflow.com/a/28883273/10878733
-        drawingOverlay = findViewById( R.id.camera_drawing_overlay )
-        drawingOverlay.setWillNotDraw(false)
-        drawingOverlay.setZOrderOnTop(true)
-
-        frameAnalyser = FrameAnalyser( drawingOverlay )
+        setContent {
+            ActivityUI()
+        }
 
         // Request the CAMERA permission as we'll require it for displaying the camera preview.
         // See https://developer.android.com/training/permissions/requesting#allow-system-manage-request-code
-        if (ActivityCompat.checkSelfPermission( this , Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.CAMERA
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
             requestCameraPermission()
-        }
-        else {
-            setupCameraProvider()
+        } else {
+            cameraPermissionStatus.value = true
         }
 
     }
 
+    @Composable
+    private fun ActivityUI() {
+        AppTheme {
+            Surface( modifier = Modifier
+                .background(Color.White)
+                .fillMaxSize() ) {
+                Box {
+                    Camera()
+                    ShowAlertDialog()
+                }
+            }
+        }
+    }
+
+    private fun createAlertDialog(
+        dialogTitle: String,
+        dialogText: String,
+        dialogPositiveButtonText: String?,
+        dialogNegativeButtonText: String?,
+        onPositiveButtonClick: (() -> Unit)?,
+        onNegativeButtonClick: (() -> Unit)?
+    ) {
+        alertDialogObjectParams.title = dialogTitle
+        alertDialogObjectParams.text = dialogText
+        alertDialogObjectParams.positiveButtonOnClick = onPositiveButtonClick
+        alertDialogObjectParams.negativeButtonOnClick = onNegativeButtonClick
+        alertDialogObjectParams.positiveButtonText = dialogPositiveButtonText
+        alertDialogObjectParams.negativeButtonText = dialogNegativeButtonText
+        alertDialogShowStatus.value = true
+    }
+
+    @Composable
+    private fun ShowAlertDialog() {
+        val visible by remember{ alertDialogShowStatus }
+        if( visible ) {
+            AlertDialog(
+                title = { Text(text = alertDialogObjectParams.title) },
+                text = { Text(text = alertDialogObjectParams.text)},
+                onDismissRequest = { /* All alert dialogs are non-cancellable */ },
+                confirmButton = {
+                    if ( alertDialogObjectParams.positiveButtonText != null ) {
+                        TextButton(onClick = {
+                            alertDialogShowStatus.value = false
+                            alertDialogObjectParams.positiveButtonOnClick?.let { it() }
+                        }) {
+                            Text(text = alertDialogObjectParams.positiveButtonText ?: "" )
+                        }
+                    }
+                },
+                dismissButton = {
+                    if( alertDialogObjectParams.negativeButtonText != null ) {
+                        TextButton(onClick = {
+                            alertDialogShowStatus.value = false
+                            alertDialogObjectParams.negativeButtonOnClick?.let{ it() }
+                        }) {
+                            Text(text = alertDialogObjectParams.negativeButtonText ?: "" )
+                        }
+                    }
+                }
+            )
+        }
+    }
+
+    @OptIn(ExperimentalGetImage::class) @Composable
+    private fun Camera() {
+        val cameraPermissionStatus by remember{ cameraPermissionStatus }
+        val lifecycleOwner = LocalLifecycleOwner.current
+        val context = LocalContext.current
+        DelayedVisibility( cameraPermissionStatus ) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize() ,
+                factory = {
+                    SegmentationOverlay(
+                        lifecycleOwner ,
+                        context
+                    )
+                }
+            )
+        }
+        DelayedVisibility( !cameraPermissionStatus ) {
+            Box( modifier = Modifier.fillMaxSize() ) {
+                Column( modifier = Modifier.align( Alignment.Center )) {
+                    Text( text = "Allow Camera Permissions" )
+                    Text( text = "The app cannot work without the camera permission." )
+                    Button(
+                        onClick = { requestCameraPermission() } ,
+                        modifier = Modifier.align( Alignment.CenterHorizontally )
+                    ) {
+                        Text(text = "Allow")
+                    }
+                }
+            }
+        }
+    }
+
+
+    @Composable
+    private fun DelayedVisibility( visible: Boolean , content: @Composable (() -> Unit) ) {
+        AnimatedVisibility(
+            visible = visible ,
+            enter = fadeIn(animationSpec = tween(1000)),
+            exit = fadeOut(animationSpec = tween(1000))
+        ) {
+            content()
+        }
+    }
 
     private fun requestCameraPermission() {
-        requestCameraPermissionLauncher.launch( Manifest.permission.CAMERA )
+        cameraPermissionLauncher.launch( Manifest.permission.CAMERA )
     }
-
-
-    private val requestCameraPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission() ) {
-            isGranted : Boolean ->
-        if ( isGranted ) {
-            setupCameraProvider()
+    private val cameraPermissionLauncher: ActivityResultLauncher<String> =
+        registerForActivityResult( ActivityResultContracts.RequestPermission() ) { isGranted ->
+            if ( isGranted ) { cameraPermissionStatus.value = true }
+            else {
+                createAlertDialog(
+                    "Camera Permission" ,
+                    "The app couldn't function without the camera permission." ,
+                    "ALLOW" ,
+                    "CLOSE" ,
+                    onPositiveButtonClick = {
+                        requestCameraPermission()
+                    } ,
+                    onNegativeButtonClick = {
+                        finish()
+                    }
+                )
+            }
         }
-        else {
-            val alertDialog = AlertDialog.Builder( this ).apply {
-                setTitle( "Permissions" )
-                setMessage( "The app requires the camera permission to function." )
-                setPositiveButton( "GRANT") { dialog, _ ->
-                    dialog.dismiss()
-                    requestCameraPermission()
-                }
-                setNegativeButton( "CLOSE" ) { dialog, _ ->
-                    dialog.dismiss()
-                    finish()
-                }
-                setCancelable( false )
-                create()
-            }
-            alertDialog.show()
-        }
-    }
-
-
-    // Setup the PreviewView for live camera feed.
-    // See the docs -> https://developer.android.com/training/camerax/preview
-    // and https://developer.android.com/training/camerax/analyze
-    private fun setupCameraProvider() {
-        cameraProviderListenableFuture = ProcessCameraProvider.getInstance( this )
-        cameraProviderListenableFuture.addListener({
-            try {
-                val cameraProvider: ProcessCameraProvider = cameraProviderListenableFuture.get()
-                bindPreview(cameraProvider)
-            }
-            catch (e: ExecutionException) {
-                Log.e("APP", e.message!!)
-            }
-            catch (e: InterruptedException) {
-                Log.e("APP", e.message!!)
-            }
-        }, ContextCompat.getMainExecutor( this ))
-    }
-
-
-    private fun bindPreview(cameraProvider: ProcessCameraProvider) {
-        val preview = Preview.Builder().build()
-        val cameraSelector = CameraSelector.Builder()
-            .requireLensFacing(CameraSelector.LENS_FACING_FRONT)
-            .build()
-        preview.setSurfaceProvider(previewView.surfaceProvider)
-        // Set the resolution which is the closest to the screen size.
-        val displayMetrics = resources.displayMetrics
-        val screenSize = Size( displayMetrics.widthPixels, displayMetrics.heightPixels)
-        val imageAnalysis = ImageAnalysis.Builder()
-            .setTargetResolution( screenSize )
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .build()
-        imageAnalysis.setAnalyzer( Executors.newSingleThreadExecutor() , frameAnalyser )
-        cameraProvider.bindToLifecycle(
-            (this as LifecycleOwner),
-            cameraSelector,
-            imageAnalysis,
-            preview
-        )
-    }
 
 }
